@@ -15,10 +15,6 @@ const schema = z.object({
   ARIBA_CLIENT_ID:     z.string().min(1),
   ARIBA_CLIENT_SECRET: z.string().min(1),
 
-  // Ariba user context
-  ARIBA_PASSWORD_ADAPTER: z.string().default("PasswordAdapter1"),
-  ARIBA_USER:             z.string().min(1),
-
   // Operational limits
   RATE_LIMIT_RPM:  z.coerce.number().default(60),
   DEFAULT_PAGE_SIZE: z.coerce.number().min(1).max(100).default(50),
