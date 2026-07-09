@@ -5,11 +5,55 @@ const app     = buildApp();
 const request = supertest(app);
 
 // MCP StreamableHTTP transport requires both JSON and SSE in Accept header
-const MCP_HEADERS = {
+const BASE_HEADERS = {
   "Authorization": "Bearer test-token",
   "Content-Type":  "application/json",
   "Accept":        "application/json, text/event-stream",
 };
+
+// ── MCP session bootstrap ─────────────────────────────────────────────────────
+// StreamableHTTPServerTransport requires an `initialize` call before any other
+// method, and expects the returned `Mcp-Session-Id` header on every following
+// request. We do this once and reuse the session id for all tests below.
+
+let sessionId: string;
+
+function mcpHeaders() {
+  return sessionId
+    ? { ...BASE_HEADERS, "Mcp-Session-Id": sessionId }
+    : BASE_HEADERS;
+}
+
+beforeAll(async () => {
+  const initRes = await request
+    .post("/mcp")
+    .set(BASE_HEADERS)
+    .send({
+      jsonrpc: "2.0",
+      id:      0,
+      method:  "initialize",
+      params:  {
+        protocolVersion: "2024-11-05",
+        capabilities:    {},
+        clientInfo:      { name: "test-client", version: "1.0" },
+      },
+    });
+
+  sessionId = initRes.headers["mcp-session-id"];
+
+  // Some SDK versions require an explicit "initialized" notification
+  // after the initialize response, before any tools/* calls will work.
+  if (sessionId) {
+    await request
+      .post("/mcp")
+      .set(mcpHeaders())
+      .send({
+        jsonrpc: "2.0",
+        method:  "notifications/initialized",
+        params:  {},
+      });
+  }
+});
 
 // ── Health endpoint ──────────────────────────────────────────────────────────
 
@@ -47,7 +91,7 @@ describe("Bearer token enforcement", () => {
   it("passes request with valid Bearer token", async () => {
     const res = await request
       .post("/mcp")
-      .set(MCP_HEADERS)
+      .set(mcpHeaders())
       .send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
 
     // MCP layer handles it — not a 401
@@ -61,7 +105,7 @@ describe("MCP tools/list", () => {
   it("returns all 6 registered vendor tools", async () => {
     const res = await request
       .post("/mcp")
-      .set(MCP_HEADERS)
+      .set(mcpHeaders())
       .send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
 
     expect(res.status).toBe(200);
@@ -84,7 +128,7 @@ describe("check_ariba_connection tool", () => {
   it("returns circuit breaker state without hitting Ariba API", async () => {
     const res = await request
       .post("/mcp")
-      .set(MCP_HEADERS)
+      .set(mcpHeaders())
       .send({
         jsonrpc: "2.0",
         id:      1,
@@ -105,7 +149,7 @@ describe("Input validation", () => {
   it("get_vendor_details rejects empty vendorId", async () => {
     const res = await request
       .post("/mcp")
-      .set(MCP_HEADERS)
+      .set(mcpHeaders())
       .send({
         jsonrpc: "2.0",
         id:      1,
@@ -121,7 +165,7 @@ describe("Input validation", () => {
   it("list_vendors rejects pageSize > 100", async () => {
     const res = await request
       .post("/mcp")
-      .set(MCP_HEADERS)
+      .set(mcpHeaders())
       .send({
         jsonrpc: "2.0",
         id:      1,
@@ -144,7 +188,7 @@ describe("Input validation", () => {
 
     const res = await request
       .post("/mcp")
-      .set(MCP_HEADERS)
+      .set(mcpHeaders())
       .send({
         jsonrpc: "2.0",
         id:      1,
@@ -167,7 +211,7 @@ describe("get_vendors_next_page", () => {
   it("rejects empty pageToken", async () => {
     const res = await request
       .post("/mcp")
-      .set(MCP_HEADERS)
+      .set(mcpHeaders())
       .send({
         jsonrpc: "2.0",
         id:      1,
