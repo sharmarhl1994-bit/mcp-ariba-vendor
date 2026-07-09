@@ -1,13 +1,16 @@
 import { McpServer }                      from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport }              from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport }   from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest }             from "@modelcontextprotocol/sdk/types.js";
 import { Router, Request, Response }       from "express";
 import { VendorAdapter }                   from "../adapters/vendor.js";
 import { registerAllTools }                from "../tools/index.js";
 import { bearerAuthMiddleware }            from "../auth/middleware.js";
 import { logger }                          from "../core/logger.js";
 
+
 const sseTransports: Record<string, SSEServerTransport> = {};
+const streamableTransports: Record<string, StreamableHTTPServerTransport> = {};
 
 function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -27,12 +30,39 @@ export function buildMcpRouter(): Router {
 
   // ── StreamableHTTP (BTP / Fiori / programmatic clients) ───────────────────
   router.post("/mcp", bearerAuthMiddleware, async (req: Request, res: Response) => {
-    const sessionId  = req.headers["x-session-id"] as string ?? crypto.randomUUID();
-    const transport  = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => sessionId,
-    });
-    const server = createMcpServer();
-    await server.connect(transport);
+    const incomingSessionId = req.headers["mcp-session-id"] as string | undefined;
+
+    let transport: StreamableHTTPServerTransport;
+
+    if (incomingSessionId && streamableTransports[incomingSessionId]) {
+      // Existing session — reuse the same transport
+      transport = streamableTransports[incomingSessionId];
+    } else if (!incomingSessionId && isInitializeRequest(req.body)) {
+      // Brand new session — create transport + server, register it
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => crypto.randomUUID(),
+        onsessioninitialized: (sid) => {
+          streamableTransports[sid] = transport;
+          logger.info("StreamableHTTP session initialized", { sessionId: sid });
+        },
+      });
+
+      transport.onclose = () => {
+        if (transport.sessionId) {
+          delete streamableTransports[transport.sessionId];
+          logger.info("StreamableHTTP session closed", { sessionId: transport.sessionId });
+        }
+      };
+
+      const server = createMcpServer();
+      await server.connect(transport);
+    } else {
+      res.status(400).json({
+        error: "Bad Request: missing or invalid Mcp-Session-Id, and not an initialize request",
+      });
+      return;
+    }
+
     await transport.handleRequest(req, res, req.body);
   });
 
