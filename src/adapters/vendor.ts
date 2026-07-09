@@ -129,7 +129,7 @@ export interface VendorSearchParams {
 
 const breaker = new CircuitBreaker({
   name:              "Ariba-VendorAPI",
-  timeout:           12_000,
+  timeout:           config.ARIBA_TIMEOUT_MS,
   errorThresholdPct: 50,
   resetTimeout:      60_000,
   volumeThreshold:   5,
