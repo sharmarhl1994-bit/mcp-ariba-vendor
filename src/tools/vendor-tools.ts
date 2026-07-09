@@ -53,24 +53,12 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
       });
 
       if (!result.vendors.length) {
-        return { content: [{ type: "text", text: "No vendors found matching the given filters." }] };
+        return { content: [{ type: "text", text: JSON.stringify({ vendors: [], totalCount: 0 }) }] };
       }
 
-      const rows = result.vendors.map(v =>
-        `  ${v.vendorId.padEnd(20)} ${v.name.padEnd(40)} ${v.registrationStatus.padEnd(15)} ${v.primaryAddress?.country ?? "N/A"}`,
-      ).join("\n");
-
-      const pagination = result.hasMore && result.pageToken
-        ? `\nNext page token: ${result.pageToken}\n(Call list_vendors with pageToken to load more)`
-        : "\n(End of results)";
-
-      const text =
-        `Vendors — Total: ${result.totalCount} | Showing: ${result.vendors.length}\n\n` +
-        `  ${"Vendor ID".padEnd(20)} ${"Name".padEnd(40)} ${"Reg. Status".padEnd(15)} Country\n` +
-        `  ${"─".repeat(83)}\n` +
-        rows + pagination;
-
-      return { content: [{ type: "text", text }] };
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
     },
   );
 
@@ -92,8 +80,7 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
         durationMs: Date.now() - start,
       });
 
-      const text = formatVendorDetail(vendor);
-      return { content: [{ type: "text", text }] };
+      return { content: [{ type: "text", text: JSON.stringify(vendor, null, 2) }] };
     },
   );
 
@@ -119,22 +106,10 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
       });
 
       if (!result.vendors.length) {
-        return {
-          content: [{ type: "text", text: `No vendors found matching "${name}".` }],
-        };
+        return { content: [{ type: "text", text: JSON.stringify({ vendors: [], totalCount: 0, query: name }) }] };
       }
 
-      const rows = result.vendors.map(v =>
-        `  ${v.vendorId.padEnd(20)} ${v.name.padEnd(40)} ${v.registrationStatus.padEnd(15)} ${v.primaryAddress?.country ?? "N/A"}`,
-      ).join("\n");
-
-      const text =
-        `Search results for "${name}" — Found: ${result.vendors.length} of ${result.totalCount}\n\n` +
-        `  ${"Vendor ID".padEnd(20)} ${"Name".padEnd(40)} ${"Reg. Status".padEnd(15)} Country\n` +
-        `  ${"─".repeat(83)}\n` +
-        rows;
-
-      return { content: [{ type: "text", text }] };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     },
   );
 
@@ -156,25 +131,7 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
         resultCount: result.vendors.length,
       });
 
-      if (!result.vendors.length) {
-        return { content: [{ type: "text", text: "No active vendors found." }] };
-      }
-
-      const rows = result.vendors.map(v =>
-        `  ${v.vendorId.padEnd(20)} ${v.name.padEnd(40)} ${v.registrationStatus.padEnd(15)} ${v.primaryAddress?.country ?? "N/A"}`,
-      ).join("\n");
-
-      const pagination = result.hasMore && result.pageToken
-        ? `\nNext page token: ${result.pageToken}`
-        : "";
-
-      const text =
-        `Active Vendors — Total: ${result.totalCount} | Showing: ${result.vendors.length}\n\n` +
-        `  ${"Vendor ID".padEnd(20)} ${"Name".padEnd(40)} ${"Reg. Status".padEnd(15)} Country\n` +
-        `  ${"─".repeat(83)}\n` +
-        rows + pagination;
-
-      return { content: [{ type: "text", text }] };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     },
   );
 
@@ -197,28 +154,7 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
         resultCount: result.vendors.length,
       });
 
-      if (!result.vendors.length) {
-        return {
-          content: [{ type: "text", text: "No more vendors — end of results." }],
-        };
-      }
-
-      const rows = result.vendors.map(v =>
-        `  ${v.vendorId.padEnd(20)} ${v.name.padEnd(40)} ${v.registrationStatus.padEnd(15)} ${v.primaryAddress?.country ?? "N/A"}`,
-      ).join("\n");
-
-      const next = result.hasMore && result.pageToken
-        ? `\nNext page token: ${result.pageToken}`
-        : "\n(End of results)";
-
-      const text =
-        `Vendors — Showing: ${result.vendors.length} of ${result.totalCount}\n\n` +
-        `  ${"Vendor ID".padEnd(20)} ${"Name".padEnd(40)} ${"Reg. Status".padEnd(15)} Country\n` +
-        `  ${"─".repeat(83)}\n` +
-        rows +
-        next;
-
-      return { content: [{ type: "text", text }] };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     },
   );
 
@@ -245,23 +181,7 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
         filters:     { name },
       });
 
-      if (!result.vendors.length) {
-        return {
-          content: [{ type: "text", text: "No inactive vendors found." }],
-        };
-      }
-
-      const rows = result.vendors.map(v =>
-        `  ${v.vendorId.padEnd(14)} ${v.erpVendorId?.padEnd(14) ?? "N/A".padEnd(14)} ${v.name.padEnd(40)} ${v.registrationStatus.padEnd(16)} ${v.qualificationStatus ?? "N/A"}`,
-      ).join("\n");
-
-      const text =
-        `Inactive Vendors — Total: ${result.totalCount}\n\n` +
-        `  ${"SM Vendor ID".padEnd(14)} ${"ERP Vendor ID".padEnd(14)} ${"Name".padEnd(40)} ${"Reg. Status".padEnd(16)} Qual. Status\n` +
-        `  ${"─".repeat(102)}\n` +
-        rows;
-
-      return { content: [{ type: "text", text }] };
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     },
   );
 
@@ -272,68 +192,11 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
     {},
     async () => {
       const state = adapter.getCircuitState();
-      const stateMsg: Record<string, string> = {
-        CLOSED:    "HEALTHY — Ariba API is responding normally.",
-        OPEN:      "DEGRADED — Ariba API is not responding. Requests are blocked to prevent cascade failures. Retry in ~60 seconds.",
-        HALF_OPEN: "RECOVERING — Testing Ariba API connectivity with next request.",
-      };
       return {
-        content: [{
-          type: "text",
-          text: `Ariba Connection Status: ${state}\n${stateMsg[state] ?? "Unknown state"}`,
-        }],
+        content: [{ type: "text", text: JSON.stringify({ status: state, healthy: state === "CLOSED" }, null, 2) }],
       };
     },
   );
 }
 
-// ── Formatter ──────────────────────────────────────────────────────────────────
-
-function formatAddress(a?: VendorAddress): string {
-  if (!a) return "N/A";
-  return [a.addressLine1, a.addressLine2, a.city, a.state, a.postalCode, a.country]
-    .filter(Boolean)
-    .join(", ");
-}
-
-function formatVendorDetail(v: Vendor): string {
-  const taxLines = v.taxNumbers?.length
-    ? v.taxNumbers.map(t => `  • [${t.type ?? "?"}] ${t.number}`).join("\n")
-    : "  N/A";
-
-  const bankLines = v.bankAccounts?.length
-    ? v.bankAccounts.map(b =>
-        `  • IBAN: ${b.iban ?? "N/A"}  Country: ${b.country ?? "N/A"}  Valid: ${b.validFrom ?? "?"} – ${b.validTo ?? "?"}`,
-      ).join("\n")
-    : "  N/A";
-
-  const customLines = v.customFields && Object.keys(v.customFields).length
-    ? Object.entries(v.customFields).map(([k, val]) => `  • ${k}: ${val}`).join("\n")
-    : "  N/A";
-
-  const qualLines = v.qualifications?.length
-    ? v.qualifications.map(q =>
-        `  • [${q.category ?? "?"}] ${q.region ?? "All"} — ${q.qualificationStatus ?? "?"}`
-      ).join("\n")
-    : "  N/A";
-
-  return (
-    `Vendor Details\n` +
-    `${"═".repeat(60)}\n` +
-    `Vendor ID          : ${v.vendorId}\n` +
-    `Name               : ${v.name}\n` +
-    `Registration Status: ${v.registrationStatus}\n` +
-    `Qualification Status: ${v.qualificationStatus ?? "N/A"}\n` +
-    `ERP Vendor ID      : ${v.erpVendorId ?? "N/A"}\n` +
-    `ACM ID             : ${v.acmId ?? "N/A"}\n` +
-    `Integrated to ERP  : ${v.integratedToErp ?? "N/A"}\n` +
-    `Blocked            : ${v.isBlocked ?? "N/A"}\n` +
-    `Last Updated       : ${v.lastUpdateDate ?? "N/A"}\n` +
-    `Realm              : ${v.realm}\n` +
-    `\nAddress        :\n  ${formatAddress(v.primaryAddress)}\n` +
-    `\nTax Numbers    :\n${taxLines}\n` +
-    `\nBank Accounts  :\n${bankLines}\n` +
-    `\nCustom Fields  :\n${customLines}\n` +
-    `\nQualifications :\n${qualLines}\n`
-  );
-}
+// unused formatter functions removed — all tools now return raw JSON
