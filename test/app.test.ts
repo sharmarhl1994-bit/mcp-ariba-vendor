@@ -11,17 +11,21 @@ const BASE_HEADERS = {
   "Accept":        "application/json, text/event-stream",
 };
 
-// ── MCP session bootstrap ─────────────────────────────────────────────────────
-// StreamableHTTPServerTransport requires an `initialize` call before any other
-// method, and expects the returned `Mcp-Session-Id` header on every following
-// request. We do this once and reuse the session id for all tests below.
-
 let sessionId: string;
 
 function mcpHeaders() {
   return sessionId
     ? { ...BASE_HEADERS, "Mcp-Session-Id": sessionId }
     : BASE_HEADERS;
+}
+
+// Server responds over text/event-stream (SSE), not plain JSON, so supertest's
+// res.body is often empty. This pulls the actual JSON-RPC payload out of the
+// SSE "data:" line when needed.
+function parseSseJson(res: supertest.Response): any {
+  if (res.body && Object.keys(res.body).length) return res.body;
+  const match = res.text?.match(/data:\s*(\{.*\})/s);
+  return match ? JSON.parse(match[1]) : {};
 }
 
 beforeAll(async () => {
@@ -41,8 +45,6 @@ beforeAll(async () => {
 
   sessionId = initRes.headers["mcp-session-id"];
 
-  // Some SDK versions require an explicit "initialized" notification
-  // after the initialize response, before any tools/* calls will work.
   if (sessionId) {
     await request
       .post("/mcp")
@@ -55,8 +57,6 @@ beforeAll(async () => {
   }
 });
 
-// ── Health endpoint ──────────────────────────────────────────────────────────
-
 describe("GET /health", () => {
   it("returns ok status", async () => {
     const res = await request.get("/health");
@@ -65,8 +65,6 @@ describe("GET /health", () => {
     expect(res.body.service).toBe("ariba-vendor-agent");
   });
 });
-
-// ── Auth middleware ──────────────────────────────────────────────────────────
 
 describe("Bearer token enforcement", () => {
   it("rejects request with no Authorization header", async () => {
@@ -94,12 +92,9 @@ describe("Bearer token enforcement", () => {
       .set(mcpHeaders())
       .send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
 
-    // MCP layer handles it — not a 401
     expect(res.status).not.toBe(401);
   });
 });
-
-// ── MCP tools/list ───────────────────────────────────────────────────────────
 
 describe("MCP tools/list", () => {
   it("returns all 6 registered vendor tools", async () => {
@@ -110,7 +105,8 @@ describe("MCP tools/list", () => {
 
     expect(res.status).toBe(200);
 
-    const tools: Array<{ name: string }> = res.body?.result?.tools ?? [];
+    const body = parseSseJson(res);
+    const tools: Array<{ name: string }> = body?.result?.tools ?? [];
     const names = tools.map((t) => t.name);
 
     expect(names).toContain("list_vendors");
@@ -121,8 +117,6 @@ describe("MCP tools/list", () => {
     expect(names).toContain("check_ariba_connection");
   });
 });
-
-// ── check_ariba_connection ────────────────────────────────────────────────────
 
 describe("check_ariba_connection tool", () => {
   it("returns circuit breaker state without hitting Ariba API", async () => {
@@ -137,13 +131,12 @@ describe("check_ariba_connection tool", () => {
       });
 
     expect(res.status).toBe(200);
-    const text: string = res.body?.result?.content?.[0]?.text ?? "";
+    const body = parseSseJson(res);
+    const text: string = body?.result?.content?.[0]?.text ?? "";
     expect(text).toContain("Ariba Connection Status");
     expect(text).toMatch(/CLOSED|OPEN|HALF_OPEN/);
   });
 });
-
-// ── Input validation ─────────────────────────────────────────────────────────
 
 describe("Input validation", () => {
   it("get_vendor_details rejects empty vendorId", async () => {
@@ -157,9 +150,9 @@ describe("Input validation", () => {
         params:  { name: "get_vendor_details", arguments: { vendorId: "" } },
       });
 
-    // MCP returns error for invalid zod input
     expect(res.status).toBe(200);
-    expect(res.body.error ?? res.body?.result?.isError).toBeTruthy();
+    const body = parseSseJson(res);
+    expect(body.error ?? body?.result?.isError).toBeTruthy();
   });
 
   it("list_vendors rejects pageSize > 100", async () => {
@@ -174,11 +167,11 @@ describe("Input validation", () => {
       });
 
     expect(res.status).toBe(200);
-    expect(res.body.error ?? res.body?.result?.isError).toBeTruthy();
+    const body = parseSseJson(res);
+    expect(body.error ?? body?.result?.isError).toBeTruthy();
   });
 
   it("list_vendors accepts valid status enum", async () => {
-    // This will try to call Ariba — mock fetch to avoid network
     const originalFetch = global.fetch;
     global.fetch = jest.fn().mockResolvedValueOnce({
       ok:   false,
@@ -198,14 +191,11 @@ describe("Input validation", () => {
 
     global.fetch = originalFetch;
 
-    // Tool was called (no schema error) — Ariba returned 503 which is expected in test
     expect(res.status).toBe(200);
-    // result or error exists — schema validation passed
-    expect(res.body.result ?? res.body.error).toBeTruthy();
+    const body = parseSseJson(res);
+    expect(body.result ?? body.error).toBeTruthy();
   });
 });
-
-// ── Pagination token ─────────────────────────────────────────────────────────
 
 describe("get_vendors_next_page", () => {
   it("rejects empty pageToken", async () => {
@@ -220,6 +210,7 @@ describe("get_vendors_next_page", () => {
       });
 
     expect(res.status).toBe(200);
-    expect(res.body.error ?? res.body?.result?.isError).toBeTruthy();
+    const body = parseSseJson(res);
+    expect(body.error ?? body?.result?.isError).toBeTruthy();
   });
 });
