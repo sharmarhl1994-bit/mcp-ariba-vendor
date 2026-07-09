@@ -23,19 +23,39 @@ export interface VendorContact {
   role?:        string;
 }
 
+export interface VendorQualification {
+  qualificationStatus?: string;
+  preferredStatus?:     string;
+  category?:            string;
+  region?:              string;
+  processType?:         string | null;
+}
+
+export interface VendorQuestionnaire {
+  questionnaireId?:    string;
+  questionnaireTitle?: string;
+  workspaceType?:      string;
+  workspaceId?:        string;
+  status?:             string;
+  regions?:            string[];
+  categories?:         string[];
+}
+
 export interface Vendor {
-  vendorId:        string;
-  name:            string;
-  status:          string;
-  type?:           string;
-  taxId?:          string;
-  dunsNumber?:     string;
-  website?:        string;
-  registeredDate?: string;
-  primaryAddress?: VendorAddress;
-  primaryContact?: VendorContact;
-  categories?:     string[];
-  realm:           string;
+  vendorId:              string;
+  name:                  string;
+  registrationStatus:    string;
+  qualificationStatus?:  string;
+  erpVendorId?:          string;
+  acmId?:                string;
+  anId?:                 string;
+  integratedToErp?:      string;
+  lastUpdateDate?:       string;
+  lastStatusChangeDate?: string;
+  primaryAddress?:       VendorAddress;
+  qualifications?:       VendorQualification[];
+  questionnaires?:       VendorQuestionnaire[];
+  realm:                 string;
 }
 
 export interface VendorListResult {
@@ -157,9 +177,10 @@ export class VendorAdapter {
       let result = mapVendorList(raw);
 
       // Client-side filtering for fields the API itself doesn't filter on.
-      if (params.status)   result = filterVendors(result, v => v.status === params.status);
+      if (params.status)   result = filterVendors(result, v => v.registrationStatus === params.status);
       if (params.country)  result = filterVendors(result, v => v.primaryAddress?.country === params.country);
-      if (params.category) result = filterVendors(result, v => (v.categories ?? []).includes(params.category!));
+      if (params.category) result = filterVendors(result, v =>
+        (v.qualifications ?? []).some(q => q.category === params.category));
       if (params.name) {
         const needle = params.name.toLowerCase();
         result = filterVendors(result, v => v.name.toLowerCase().includes(needle));
@@ -197,86 +218,103 @@ export class VendorAdapter {
 }
 
 // ── Ariba raw response shapes ──────────────────────────────────────────────────
-// Ariba OpenAPI v4 returns data wrapped in a "content" array with pagination metadata
+// /api/supplierdatapagination/v4/prod/vendorDataRequests returns a plain array
+// with flat "Address - X" fields and space-in-key naming convention.
+
+interface AribaQualificationRaw {
+  "Qualification Status"?: string;
+  "Preferred Status"?:     string;
+  "Category"?:             string;
+  "Region"?:               string;
+  "Business Unit"?:        string | null;
+  "Material ID"?:          string | null;
+  "Process Type"?:         string | null;
+}
+
+interface AribaQuestionnaireMatrixRaw {
+  "Status"?:        string;
+  "Region"?:        string[];
+  "Category"?:      string[];
+  "Business Unit"?: string[];
+  "Material ID"?:   string[];
+  "Process Type"?:  string[];
+}
+
+interface AribaQuestionnaireRaw {
+  questionnaireId?:    string;
+  questionnaireTitle?: string;
+  workspaceType?:      string;
+  workspaceId?:        string;
+  matrixInfo?:         AribaQuestionnaireMatrixRaw;
+}
 
 interface AribaVendorRaw {
-  vendorId?:          string;
-  id?:                string;
-  name?:              string;
-  vendorName?:        string;
-  status?:            string;
-  vendorStatus?:      string;
-  supplierType?:      string;
-  taxId?:             string;
-  dunsNumber?:        string;
-  website?:           string;
-  registrationDate?:  string;
-  createdDate?:       string;
-  address?: {
-    addressLine1?: string;
-    addressLine2?: string;
-    city?:         string;
-    state?:        string;
-    postalCode?:   string;
-    country?:      string;
-  };
-  contacts?: Array<{
-    firstName?: string;
-    lastName?:  string;
-    email?:     string;
-    phone?:     string;
-    role?:      string;
-  }>;
-  commodityCategories?: string[];
-  categories?:          string[];
+  "Supplier Name"?:           string;
+  "SM Vendor ID"?:            string;
+  "ERP Vendor ID"?:           string;
+  "ACM ID"?:                  string;
+  "An Id"?:                   string;
+  "Registration Status"?:     string;
+  "Qualification Status"?:    string;
+  "Integrated to ERP"?:       string;
+  "Address - Line1"?:         string;
+  "Address - Line2"?:         string;
+  "Address - City"?:          string;
+  "Address - Region Code"?:   string;
+  "Address - Country Code"?:  string;
+  "Address - Postal Code"?:   string;
+  "Last Update Date"?:        string;
+  "Last Status Change Date"?: string;
+  qualifications?:            AribaQualificationRaw[];
+  questionnaires?:            AribaQuestionnaireRaw[];
 }
 
-interface AribaVendorListResponse {
-  content?:       AribaVendorRaw[];
-  data?:          AribaVendorRaw[];
-  totalElements?: number;
-  totalCount?:    number;
-  nextPageToken?: string;
-  pageToken?:     string;
-  hasMore?:       boolean;
-}
+// The vendorDataRequests endpoint returns a plain JSON array (no wrapper object)
+type AribaVendorListResponse = AribaVendorRaw[];
 
 type AribaVendorResponse = AribaVendorRaw;
 
 // ── Mappers ────────────────────────────────────────────────────────────────────
 
 function mapVendor(r: AribaVendorRaw): Vendor {
-  const primary = r.contacts?.[0];
   return {
-    vendorId:        r.vendorId ?? r.id ?? "UNKNOWN",
-    name:            r.name ?? r.vendorName ?? "Unknown",
-    status:          r.status ?? r.vendorStatus ?? "UNKNOWN",
-    type:            r.supplierType,
-    taxId:           r.taxId,
-    dunsNumber:      r.dunsNumber,
-    website:         r.website,
-    registeredDate:  r.registrationDate ?? r.createdDate,
-    primaryAddress:  r.address
+    vendorId:              r["SM Vendor ID"] ?? "UNKNOWN",
+    name:                  r["Supplier Name"] ?? "Unknown",
+    registrationStatus:    r["Registration Status"] ?? "UNKNOWN",
+    qualificationStatus:   r["Qualification Status"],
+    erpVendorId:           r["ERP Vendor ID"],
+    acmId:                 r["ACM ID"],
+    anId:                  r["An Id"],
+    integratedToErp:       r["Integrated to ERP"],
+    lastUpdateDate:        r["Last Update Date"],
+    lastStatusChangeDate:  r["Last Status Change Date"],
+    primaryAddress: (r["Address - Line1"] || r["Address - City"] || r["Address - Country Code"])
       ? {
-          addressLine1: r.address.addressLine1,
-          addressLine2: r.address.addressLine2,
-          city:         r.address.city,
-          state:        r.address.state,
-          postalCode:   r.address.postalCode,
-          country:      r.address.country,
+          addressLine1: r["Address - Line1"],
+          addressLine2: r["Address - Line2"],
+          city:         r["Address - City"],
+          state:        r["Address - Region Code"],
+          postalCode:   r["Address - Postal Code"],
+          country:      r["Address - Country Code"],
         }
       : undefined,
-    primaryContact: primary
-      ? {
-          firstName: primary.firstName,
-          lastName:  primary.lastName,
-          email:     primary.email,
-          phone:     primary.phone,
-          role:      primary.role,
-        }
-      : undefined,
-    categories: r.commodityCategories ?? r.categories,
-    realm:      config.ARIBA_REALM,
+    qualifications: r.qualifications?.map(q => ({
+      qualificationStatus: q["Qualification Status"],
+      preferredStatus:     q["Preferred Status"],
+      category:            q["Category"],
+      region:              q["Region"],
+      processType:         q["Process Type"],
+    })),
+    questionnaires: r.questionnaires?.map(q => ({
+      questionnaireId:    q.questionnaireId,
+      questionnaireTitle: q.questionnaireTitle,
+      workspaceType:      q.workspaceType,
+      workspaceId:        q.workspaceId,
+      status:             q.matrixInfo?.["Status"],
+      regions:            q.matrixInfo?.["Region"],
+      categories:         q.matrixInfo?.["Category"],
+    })),
+    realm: config.ARIBA_REALM,
   };
 }
 
@@ -291,15 +329,10 @@ function filterVendors(result: VendorListResult, predicate: (v: Vendor) => boole
 }
 
 function mapVendorList(raw: AribaVendorListResponse): VendorListResult {
-  const items      = raw.content ?? raw.data ?? [];
-  const totalCount = raw.totalElements ?? raw.totalCount ?? items.length;
-  const pageToken  = raw.nextPageToken ?? raw.pageToken;
-  const hasMore    = raw.hasMore ?? (pageToken != null && pageToken !== "");
-
   return {
-    vendors:    items.map(mapVendor),
-    totalCount,
-    pageToken,
-    hasMore,
+    vendors:    raw.map(mapVendor),
+    totalCount: raw.length,
+    pageToken:  undefined,
+    hasMore:    false,
   };
 }
