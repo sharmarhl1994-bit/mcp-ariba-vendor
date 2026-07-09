@@ -35,10 +35,8 @@ export function buildMcpRouter(): Router {
     let transport: StreamableHTTPServerTransport;
 
     if (incomingSessionId && streamableTransports[incomingSessionId]) {
-      // Existing session — reuse the same transport
       transport = streamableTransports[incomingSessionId];
     } else if (!incomingSessionId && isInitializeRequest(req.body)) {
-      // Brand new session — create transport + server, register it
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
         onsessioninitialized: (sid) => {
