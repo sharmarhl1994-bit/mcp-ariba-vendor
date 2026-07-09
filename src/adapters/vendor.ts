@@ -23,6 +23,37 @@ export interface VendorContact {
   role?:        string;
 }
 
+export interface VendorTaxNumber {
+  type?:   string;
+  number?: string;
+}
+
+export interface VendorBankAccount {
+  validFrom?: string;
+  validTo?:   string;
+  iban?:      string;
+  country?:   string;
+}
+
+export interface InactiveVendor {
+  vendorId:             string;
+  name:                 string;
+  erpVendorId?:         string;
+  acmId?:               string;
+  anId?:                string;
+  registrationStatus:   string;
+  qualificationStatus?: string;
+  erpIntStatus?:        string;
+  timeUpdated?:         number;
+  timeCreated?:         number;
+  realm:                string;
+}
+
+export interface InactiveVendorListResult {
+  vendors:    InactiveVendor[];
+  totalCount: number;
+}
+
 export interface VendorQualification {
   qualificationStatus?: string;
   preferredStatus?:     string;
@@ -52,7 +83,11 @@ export interface Vendor {
   integratedToErp?:      string;
   lastUpdateDate?:       string;
   lastStatusChangeDate?: string;
+  isBlocked?:            boolean;
   primaryAddress?:       VendorAddress;
+  taxNumbers?:           VendorTaxNumber[];
+  bankAccounts?:         VendorBankAccount[];
+  customFields?:         Record<string, string>;
   qualifications?:       VendorQualification[];
   questionnaires?:       VendorQuestionnaire[];
   realm:                 string;
@@ -66,13 +101,28 @@ export interface VendorListResult {
 }
 
 export interface VendorSearchParams {
-  status?:     string;        // applied client-side (see listVendors)
-  name?:       string;        // partial name search, applied client-side
-  country?:    string;        // ISO-2 country code, applied client-side
-  category?:   string;        // commodity category code, applied client-side
-  vendorIds?:  string[];      // SM/ERP vendor IDs — sent to Ariba as smVendorIds
-  pageToken?:  string;        // cursor from previous page
-  pageSize?:   number;        // 1–100, default from config
+  // ID filters — sent to Ariba directly
+  smVendorIds?:              string[];
+  erpVendorIds?:             string[];
+  // Server-side list filters
+  businessUnitList?:         string[];
+  categoryList?:             string[];
+  qualificationStatusList?:  string[];
+  regionList?:               string[];
+  registrationStatusList?:   string[];
+  preferredLevelList?:       number[];
+  // Include flags
+  withQuestionnaire?:        boolean;
+  withGenericCustomFields?:  boolean;
+  withBankDetail?:           boolean;
+  withTaxDetail?:            boolean;
+  withCompanyCodeDetail?:    boolean;
+  withDisqualifications?:    boolean;
+  // Client-side name filter (Ariba has no free-text name search)
+  name?:                     string;
+  // Pagination
+  pageToken?:                string;
+  pageSize?:                 number;
 }
 
 // ── Infrastructure ─────────────────────────────────────────────────────────────
@@ -148,26 +198,30 @@ export class VendorAdapter {
 
   async listVendors(params: VendorSearchParams = {}): Promise<VendorListResult> {
     return breaker.call(async () => {
-      // The documented vendorDataRequests body schema takes outputFormat,
-      // pageLimit, withQuestionnaire/withBankDetail/etc, and optional
-      // smVendorIds / erpVendorIds filter lists (comma-separated strings).
-      // It does NOT document filtering by free-text name/status/country/category —
-      // those are applied client-side below, after the page is fetched.
       const body: Record<string, unknown> = {
-        outputFormat:      "JSON",
-        pageLimit:         params.pageSize ?? config.DEFAULT_PAGE_SIZE,
-        withQuestionnaire: true,
+        outputFormat: "JSON",
+        pageLimit:    params.pageSize ?? config.DEFAULT_PAGE_SIZE,
       };
 
-      if (params.vendorIds?.length) {
-        body.smVendorIds = params.vendorIds.join(",");
-      }
-      if (params.pageToken) {
-        // NOTE: confirm the exact continuation-token field name against a
-        // real response from your tenant (e.g. it may be "nextPageToken" on
-        // the request side too, or pagination may be request/poll based).
-        body.pageToken = params.pageToken;
-      }
+      // ID filters
+      if (params.smVendorIds?.length)             body.smVendorIds             = params.smVendorIds;
+      if (params.erpVendorIds?.length)            body.erpVendorIds            = params.erpVendorIds;
+      // Server-side list filters
+      if (params.businessUnitList?.length)        body.businessUnitList        = params.businessUnitList;
+      if (params.categoryList?.length)            body.categoryList            = params.categoryList;
+      if (params.qualificationStatusList?.length) body.qualificationStatusList = params.qualificationStatusList;
+      if (params.regionList?.length)              body.regionList              = params.regionList;
+      if (params.registrationStatusList?.length)  body.registrationStatusList  = params.registrationStatusList;
+      if (params.preferredLevelList?.length)      body.preferredLevelList      = params.preferredLevelList;
+      // Include flags — default withQuestionnaire true, rest only if explicitly requested
+      body.withQuestionnaire       = params.withQuestionnaire       ?? true;
+      body.withGenericCustomFields = params.withGenericCustomFields  ?? false;
+      body.withBankDetail          = params.withBankDetail           ?? false;
+      body.withTaxDetail           = params.withTaxDetail            ?? false;
+      body.withCompanyCodeDetail   = params.withCompanyCodeDetail    ?? false;
+      body.withDisqualifications   = params.withDisqualifications    ?? false;
+      // Pagination cursor
+      if (params.pageToken) body.pageToken = params.pageToken;
 
       const raw = await aribaFetch(
         "/api/supplierdatapagination/v4/prod/vendorDataRequests",
@@ -176,11 +230,7 @@ export class VendorAdapter {
 
       let result = mapVendorList(raw);
 
-      // Client-side filtering for fields the API itself doesn't filter on.
-      if (params.status)   result = filterVendors(result, v => v.registrationStatus === params.status);
-      if (params.country)  result = filterVendors(result, v => v.primaryAddress?.country === params.country);
-      if (params.category) result = filterVendors(result, v =>
-        (v.qualifications ?? []).some(q => q.category === params.category));
+      // Client-side name filter only — all other filters are handled server-side
       if (params.name) {
         const needle = params.name.toLowerCase();
         result = filterVendors(result, v => v.name.toLowerCase().includes(needle));
@@ -194,9 +244,9 @@ export class VendorAdapter {
     return breaker.call(async () => {
       const raw = await aribaFetch(
         `/api/supplierdatapagination/v4/prod/vendors/${encodeURIComponent(vendorId)}/extensionDetails`,
-      ) as AribaVendorResponse;
+      ) as AribaExtensionDetailsRaw;
 
-      return mapVendor(raw);
+      return mapVendorExtension(raw);
     });
   }
 
@@ -204,8 +254,41 @@ export class VendorAdapter {
     return this.listVendors({ name, pageSize });
   }
 
-  async getActiveVendors(country?: string, pageSize?: number): Promise<VendorListResult> {
-    return this.listVendors({ status: "ACTIVE", country, pageSize });
+  async listInactiveVendors(params: {
+    name?:             string;
+    smVendorIds?:      string[];
+    erpVendorIds?:     string[];
+    withQuestionnaire?: boolean;
+    pageSize?:         number;
+  } = {}): Promise<InactiveVendorListResult> {
+    return breaker.call(async () => {
+      const body: Record<string, unknown> = {
+        outputFormat:      "JSON",
+        pageLimit:         params.pageSize ?? config.DEFAULT_PAGE_SIZE,
+        withQuestionnaire: params.withQuestionnaire ?? true,
+      };
+
+      if (params.smVendorIds?.length)  body.smVendorIds  = params.smVendorIds;
+      if (params.erpVendorIds?.length) body.erpVendorIds = params.erpVendorIds;
+
+      const raw = await aribaFetch(
+        "/api/supplierdatapagination/v4/prod/inactiveVendorDataRequests/",
+        { method: "POST", jsonBody: body },
+      ) as AribaInactiveVendorListResponse;
+
+      let vendors = (raw.vendorDetails ?? []).map(mapInactiveVendor);
+
+      if (params.name) {
+        const needle = params.name.toLowerCase();
+        vendors = vendors.filter(v => v.name.toLowerCase().includes(needle));
+      }
+
+      return { vendors, totalCount: vendors.length };
+    });
+  }
+
+  async getActiveVendors(pageSize?: number): Promise<VendorListResult> {
+    return this.listVendors({ registrationStatusList: ["Registered"], pageSize });
   }
 
   async getNextPage(pageToken: string, pageSize?: number): Promise<VendorListResult> {
@@ -272,7 +355,71 @@ interface AribaVendorRaw {
 // The vendorDataRequests endpoint returns a plain JSON array (no wrapper object)
 type AribaVendorListResponse = AribaVendorRaw[];
 
-type AribaVendorResponse = AribaVendorRaw;
+// ── inactiveVendorDataRequests raw shape ───────────────────────────────────────
+// POST /inactiveVendorDataRequests/ — returns { vendorDetails: [...] }
+
+interface AribaInactiveVendorRaw {
+  supplierName?:        string | null;
+  name2?:               string | null;
+  name3?:               string | null;
+  name4?:               string | null;
+  erpVendorId?:         string | null;
+  smVendorId?:          string | null;
+  acmId?:               string | null;
+  anId?:                string | null;
+  registrationStatus?:  string | null;
+  qualificationStatus?: string | null;
+  erpIntStatus?:        string | null;
+  timeUpdated?:         number | null;
+  timeCreated?:         number | null;
+}
+
+interface AribaInactiveVendorListResponse {
+  vendorDetails?: AribaInactiveVendorRaw[];
+}
+
+// ── extensionDetails raw shape ─────────────────────────────────────────────────
+// GET /vendors/{id}/extensionDetails — deeply nested SAP Business Partner structure
+
+interface AribaExtensionDetailsRaw {
+  internalID?:   string;
+  isBlocked?:    boolean;
+  organization?: {
+    nameDetails?: {
+      formattedOrgNameLine1?: string | null;
+    };
+  };
+  addressData?: Array<{
+    organizationPostalAddress?: {
+      street?:        { name?: string | null } | null;
+      houseNumber?:   string | null;
+      town?:          { name?: string | null } | null;
+      primaryRegion?: { code?: string | null } | null;
+      country?:       { code?: string | null } | null;
+      postCode?:      string | null;
+    } | null;
+  }>;
+  taxNumbers?: Array<{
+    taxNumberType?: { code?: string | null };
+    taxNumber?:     string | null;
+  }>;
+  bankAccounts?: Array<{
+    validFrom?: string | null;
+    validTo?:   string | null;
+    IBAN?:      string | null;
+    bankCountry?: { code?: string | null };
+  }>;
+  supplierGenericCustomField?: Array<{
+    name?:    string | null;
+    content?: string | null;
+    active?:  boolean;
+  }>;
+  businessPartnerGenericCustomField?: Array<{
+    name?:    string | null;
+    content?: string | null;
+    active?:  boolean;
+  }>;
+}
 
 // ── Mappers ────────────────────────────────────────────────────────────────────
 
@@ -318,6 +465,47 @@ function mapVendor(r: AribaVendorRaw): Vendor {
   };
 }
 
+function mapVendorExtension(r: AribaExtensionDetailsRaw): Vendor {
+  const addr = r.addressData?.[0]?.organizationPostalAddress;
+
+  // Collect all custom fields (supplier + bp) into a flat name→content map
+  const customFields: Record<string, string> = {};
+  for (const f of [...(r.supplierGenericCustomField ?? []), ...(r.businessPartnerGenericCustomField ?? [])]) {
+    if (f.active && f.name && f.content != null) {
+      customFields[f.name.trim()] = f.content;
+    }
+  }
+
+  return {
+    vendorId:           r.internalID ?? "UNKNOWN",
+    name:               r.organization?.nameDetails?.formattedOrgNameLine1 ?? customFields["FirstName"] ?? "Unknown",
+    registrationStatus: "UNKNOWN",   // not present in extensionDetails — caller merges from list if needed
+    isBlocked:          r.isBlocked,
+    primaryAddress: addr
+      ? {
+          addressLine1: [addr.street?.name, addr.houseNumber].filter(Boolean).join(" ") || undefined,
+          city:         addr.town?.name ?? undefined,
+          state:        addr.primaryRegion?.code ?? undefined,
+          postalCode:   addr.postCode ?? undefined,
+          country:      addr.country?.code ?? undefined,
+        }
+      : undefined,
+    taxNumbers: r.taxNumbers
+      ?.filter(t => t.taxNumber)
+      .map(t => ({ type: t.taxNumberType?.code ?? undefined, number: t.taxNumber ?? undefined })),
+    bankAccounts: r.bankAccounts
+      ?.filter(b => b.IBAN || b.validFrom)
+      .map(b => ({
+        validFrom: b.validFrom ?? undefined,
+        validTo:   b.validTo  ?? undefined,
+        iban:      b.IBAN     ?? undefined,
+        country:   b.bankCountry?.code ?? undefined,
+      })),
+    customFields: Object.keys(customFields).length ? customFields : undefined,
+    realm: config.ARIBA_REALM,
+  };
+}
+
 // NOTE: because these filters run client-side on a single page of results,
 // totalCount/hasMore/pageToken below reflect the *server's* full result set,
 // not the filtered subset — the filtered totalCount is only accurate for the
@@ -334,5 +522,23 @@ function mapVendorList(raw: AribaVendorListResponse): VendorListResult {
     totalCount: raw.length,
     pageToken:  undefined,
     hasMore:    false,
+  };
+}
+
+function mapInactiveVendor(r: AribaInactiveVendorRaw): InactiveVendor {
+  // name2/name3/name4 are overflow segments for long names — join non-null parts
+  const nameParts = [r.supplierName, r.name2, r.name3, r.name4].filter(Boolean);
+  return {
+    vendorId:            r.smVendorId ?? "UNKNOWN",
+    name:                nameParts.join(" ") || "Unknown",
+    erpVendorId:         r.erpVendorId ?? undefined,
+    acmId:               r.acmId ?? undefined,
+    anId:                r.anId ?? undefined,
+    registrationStatus:  r.registrationStatus ?? "UNKNOWN",
+    qualificationStatus: r.qualificationStatus ?? undefined,
+    erpIntStatus:        r.erpIntStatus ?? undefined,
+    timeUpdated:         r.timeUpdated ?? undefined,
+    timeCreated:         r.timeCreated ?? undefined,
+    realm:               config.ARIBA_REALM,
   };
 }

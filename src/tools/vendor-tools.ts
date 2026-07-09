@@ -2,48 +2,62 @@ import { McpServer }     from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z }             from "zod";
 import { VendorAdapter } from "../adapters/vendor.js";
 import { AuditEmitter }  from "../core/audit.js";
-import type { Vendor, VendorAddress, VendorContact } from "../adapters/vendor.js";
+import type { Vendor, VendorAddress, InactiveVendor } from "../adapters/vendor.js";
 
 export function registerVendorTools(server: McpServer, adapter: VendorAdapter): void {
 
   // ── Tool 1: List / Filter Vendors ──────────────────────────────────────────
   server.tool(
     "list_vendors",
-    "List vendors from SAP Ariba with optional filters. Supports pagination via pageToken.",
+    "List vendors from SAP Ariba. All filters are sent server-side except 'name' which is client-side.",
     {
-      status:    z.enum(["ACTIVE", "INACTIVE", "PENDING"]).optional()
-                  .describe("Filter by vendor status"),
-      name:      z.string().optional()
-                  .describe("Partial vendor name search (case-insensitive)"),
-      country:   z.string().max(2).optional()
-                  .describe("Filter by country ISO-2 code e.g. DE, US, IN"),
-      category:  z.string().optional()
-                  .describe("Filter by commodity category code"),
-      pageSize:  z.number().min(1).max(100).optional()
-                  .describe("Results per page (1–100, default 50)"),
-      pageToken: z.string().optional()
-                  .describe("Pagination cursor from previous list_vendors call"),
+      smVendorIds:              z.array(z.string()).optional()
+                                 .describe("Filter by SM Vendor IDs e.g. [\"S123456\"]"),
+      erpVendorIds:             z.array(z.string()).optional()
+                                 .describe("Filter by ERP Vendor IDs"),
+      registrationStatusList:   z.array(z.string()).optional()
+                                 .describe("e.g. [\"Registered\", \"InRegistration\", \"Invited\"]"),
+      qualificationStatusList:  z.array(z.string()).optional()
+                                 .describe("e.g. [\"Qualified\", \"InQualification\"]"),
+      regionList:               z.array(z.string()).optional()
+                                 .describe("e.g. [\"USA\", \"INDIA\", \"KAZ\"]"),
+      categoryList:             z.array(z.string()).optional()
+                                 .describe("Category codes e.g. [\"51\", \"71\"]"),
+      businessUnitList:         z.array(z.string()).optional()
+                                 .describe("Business unit codes e.g. [\"408\", \"1000\"]"),
+      preferredLevelList:       z.array(z.number()).optional()
+                                 .describe("Preferred levels e.g. [0, 1, 2]"),
+      name:                     z.string().optional()
+                                 .describe("Partial name search (client-side, case-insensitive)"),
+      withQuestionnaire:        z.boolean().optional().describe("Include questionnaire data (default true)"),
+      withGenericCustomFields:  z.boolean().optional().describe("Include custom fields"),
+      withBankDetail:           z.boolean().optional().describe("Include bank account details"),
+      withTaxDetail:            z.boolean().optional().describe("Include tax number details"),
+      withCompanyCodeDetail:    z.boolean().optional().describe("Include company code details"),
+      withDisqualifications:    z.boolean().optional().describe("Include disqualification data"),
+      pageSize:                 z.number().min(1).max(100).optional()
+                                 .describe("Results per page (1–100, default 50)"),
+      pageToken:                z.string().optional()
+                                 .describe("Pagination cursor from previous call"),
     },
-    async ({ status, name, country, category, pageSize, pageToken }) => {
+    async (params) => {
       const start  = Date.now();
-      const result = await adapter.listVendors({ status, name, country, category, pageSize, pageToken });
+      const result = await adapter.listVendors(params);
 
       AuditEmitter.emit({
         action:      "LIST_VENDORS",
         tool:        "list_vendors",
         durationMs:  Date.now() - start,
         resultCount: result.vendors.length,
-        filters:     { status, name, country, category },
+        filters:     { registrationStatusList: params.registrationStatusList, name: params.name },
       });
 
       if (!result.vendors.length) {
-        return {
-          content: [{ type: "text", text: "No vendors found matching the given filters." }],
-        };
+        return { content: [{ type: "text", text: "No vendors found matching the given filters." }] };
       }
 
       const rows = result.vendors.map(v =>
-        `  ${v.vendorId.padEnd(20)} ${v.name.padEnd(40)} ${v.status.padEnd(10)} ${v.primaryAddress?.country ?? "N/A"}`,
+        `  ${v.vendorId.padEnd(20)} ${v.name.padEnd(40)} ${v.registrationStatus.padEnd(15)} ${v.primaryAddress?.country ?? "N/A"}`,
       ).join("\n");
 
       const pagination = result.hasMore && result.pageToken
@@ -52,10 +66,9 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
 
       const text =
         `Vendors — Total: ${result.totalCount} | Showing: ${result.vendors.length}\n\n` +
-        `  ${"Vendor ID".padEnd(20)} ${"Name".padEnd(40)} ${"Status".padEnd(10)} Country\n` +
-        `  ${"─".repeat(78)}\n` +
-        rows +
-        pagination;
+        `  ${"Vendor ID".padEnd(20)} ${"Name".padEnd(40)} ${"Reg. Status".padEnd(15)} Country\n` +
+        `  ${"─".repeat(83)}\n` +
+        rows + pagination;
 
       return { content: [{ type: "text", text }] };
     },
@@ -112,13 +125,13 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
       }
 
       const rows = result.vendors.map(v =>
-        `  ${v.vendorId.padEnd(20)} ${v.name.padEnd(40)} ${v.status.padEnd(10)} ${v.primaryAddress?.country ?? "N/A"}`,
+        `  ${v.vendorId.padEnd(20)} ${v.name.padEnd(40)} ${v.registrationStatus.padEnd(15)} ${v.primaryAddress?.country ?? "N/A"}`,
       ).join("\n");
 
       const text =
         `Search results for "${name}" — Found: ${result.vendors.length} of ${result.totalCount}\n\n` +
-        `  ${"Vendor ID".padEnd(20)} ${"Name".padEnd(40)} ${"Status".padEnd(10)} Country\n` +
-        `  ${"─".repeat(78)}\n` +
+        `  ${"Vendor ID".padEnd(20)} ${"Name".padEnd(40)} ${"Reg. Status".padEnd(15)} Country\n` +
+        `  ${"─".repeat(83)}\n` +
         rows;
 
       return { content: [{ type: "text", text }] };
@@ -128,38 +141,27 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
   // ── Tool 4: Get Active Vendors ─────────────────────────────────────────────
   server.tool(
     "get_active_vendors",
-    "Get all active vendors from SAP Ariba, optionally filtered by country.",
+    "Get all Registered vendors from SAP Ariba.",
     {
-      country:  z.string().max(2).optional()
-                 .describe("Filter by country ISO-2 code e.g. DE, US"),
-      pageSize: z.number().min(1).max(100).optional()
-                 .describe("Results per page (default 50)"),
+      pageSize: z.number().min(1).max(100).optional().describe("Results per page (default 50)"),
     },
-    async ({ country, pageSize }) => {
+    async ({ pageSize }) => {
       const start  = Date.now();
-      const result = await adapter.getActiveVendors(country, pageSize);
+      const result = await adapter.getActiveVendors(pageSize);
 
       AuditEmitter.emit({
         action:      "GET_ACTIVE_VENDORS",
         tool:        "get_active_vendors",
         durationMs:  Date.now() - start,
         resultCount: result.vendors.length,
-        country,
       });
 
       if (!result.vendors.length) {
-        return {
-          content: [{
-            type: "text",
-            text: country
-              ? `No active vendors found in country "${country}".`
-              : "No active vendors found.",
-          }],
-        };
+        return { content: [{ type: "text", text: "No active vendors found." }] };
       }
 
       const rows = result.vendors.map(v =>
-        `  ${v.vendorId.padEnd(20)} ${v.name.padEnd(40)} ${v.primaryAddress?.country ?? "N/A"}`,
+        `  ${v.vendorId.padEnd(20)} ${v.name.padEnd(40)} ${v.registrationStatus.padEnd(15)} ${v.primaryAddress?.country ?? "N/A"}`,
       ).join("\n");
 
       const pagination = result.hasMore && result.pageToken
@@ -167,11 +169,10 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
         : "";
 
       const text =
-        `Active Vendors${country ? ` in ${country}` : ""} — Total: ${result.totalCount} | Showing: ${result.vendors.length}\n\n` +
-        `  ${"Vendor ID".padEnd(20)} ${"Name".padEnd(40)} Country\n` +
-        `  ${"─".repeat(68)}\n` +
-        rows +
-        pagination;
+        `Active Vendors — Total: ${result.totalCount} | Showing: ${result.vendors.length}\n\n` +
+        `  ${"Vendor ID".padEnd(20)} ${"Name".padEnd(40)} ${"Reg. Status".padEnd(15)} Country\n` +
+        `  ${"─".repeat(83)}\n` +
+        rows + pagination;
 
       return { content: [{ type: "text", text }] };
     },
@@ -203,7 +204,7 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
       }
 
       const rows = result.vendors.map(v =>
-        `  ${v.vendorId.padEnd(20)} ${v.name.padEnd(40)} ${v.status.padEnd(10)} ${v.primaryAddress?.country ?? "N/A"}`,
+        `  ${v.vendorId.padEnd(20)} ${v.name.padEnd(40)} ${v.registrationStatus.padEnd(15)} ${v.primaryAddress?.country ?? "N/A"}`,
       ).join("\n");
 
       const next = result.hasMore && result.pageToken
@@ -212,8 +213,8 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
 
       const text =
         `Vendors — Showing: ${result.vendors.length} of ${result.totalCount}\n\n` +
-        `  ${"Vendor ID".padEnd(20)} ${"Name".padEnd(40)} ${"Status".padEnd(10)} Country\n` +
-        `  ${"─".repeat(78)}\n` +
+        `  ${"Vendor ID".padEnd(20)} ${"Name".padEnd(40)} ${"Reg. Status".padEnd(15)} Country\n` +
+        `  ${"─".repeat(83)}\n` +
         rows +
         next;
 
@@ -221,7 +222,50 @@ export function registerVendorTools(server: McpServer, adapter: VendorAdapter): 
     },
   );
 
-  // ── Tool 6: Health / Circuit Status ───────────────────────────────────────
+  // ── Tool 6: List Inactive Vendors ─────────────────────────────────────────
+  server.tool(
+    "list_inactive_vendors",
+    "List inactive/archived vendors from SAP Ariba. These are vendors removed from the active supplier base.",
+    {
+      smVendorIds:       z.array(z.string()).optional().describe("Filter by SM Vendor IDs e.g. [\"S123456\"]"),
+      erpVendorIds:      z.array(z.string()).optional().describe("Filter by ERP Vendor IDs"),
+      withQuestionnaire: z.boolean().optional().describe("Include questionnaire data (default true)"),
+      name:              z.string().optional().describe("Partial name search (client-side, case-insensitive)"),
+      pageSize:          z.number().min(1).max(100).optional().describe("Results per page (default 50)"),
+    },
+    async ({ smVendorIds, erpVendorIds, withQuestionnaire, name, pageSize }) => {
+      const start  = Date.now();
+      const result = await adapter.listInactiveVendors({ smVendorIds, erpVendorIds, withQuestionnaire, name, pageSize });
+
+      AuditEmitter.emit({
+        action:      "LIST_INACTIVE_VENDORS",
+        tool:        "list_inactive_vendors",
+        durationMs:  Date.now() - start,
+        resultCount: result.vendors.length,
+        filters:     { name },
+      });
+
+      if (!result.vendors.length) {
+        return {
+          content: [{ type: "text", text: "No inactive vendors found." }],
+        };
+      }
+
+      const rows = result.vendors.map(v =>
+        `  ${v.vendorId.padEnd(14)} ${v.erpVendorId?.padEnd(14) ?? "N/A".padEnd(14)} ${v.name.padEnd(40)} ${v.registrationStatus.padEnd(16)} ${v.qualificationStatus ?? "N/A"}`,
+      ).join("\n");
+
+      const text =
+        `Inactive Vendors — Total: ${result.totalCount}\n\n` +
+        `  ${"SM Vendor ID".padEnd(14)} ${"ERP Vendor ID".padEnd(14)} ${"Name".padEnd(40)} ${"Reg. Status".padEnd(16)} Qual. Status\n` +
+        `  ${"─".repeat(102)}\n` +
+        rows;
+
+      return { content: [{ type: "text", text }] };
+    },
+  );
+
+  // ── Tool 7: Health / Circuit Status ───────────────────────────────────────
   server.tool(
     "check_ariba_connection",
     "Check the current health of the Ariba API connection (circuit breaker state).",
@@ -252,30 +296,44 @@ function formatAddress(a?: VendorAddress): string {
     .join(", ");
 }
 
-function formatContact(c?: VendorContact): string {
-  if (!c) return "N/A";
-  const name  = [c.firstName, c.lastName].filter(Boolean).join(" ");
-  const parts = [name, c.role, c.email, c.phone].filter(Boolean);
-  return parts.join(" | ") || "N/A";
-}
-
 function formatVendorDetail(v: Vendor): string {
+  const taxLines = v.taxNumbers?.length
+    ? v.taxNumbers.map(t => `  • [${t.type ?? "?"}] ${t.number}`).join("\n")
+    : "  N/A";
+
+  const bankLines = v.bankAccounts?.length
+    ? v.bankAccounts.map(b =>
+        `  • IBAN: ${b.iban ?? "N/A"}  Country: ${b.country ?? "N/A"}  Valid: ${b.validFrom ?? "?"} – ${b.validTo ?? "?"}`,
+      ).join("\n")
+    : "  N/A";
+
+  const customLines = v.customFields && Object.keys(v.customFields).length
+    ? Object.entries(v.customFields).map(([k, val]) => `  • ${k}: ${val}`).join("\n")
+    : "  N/A";
+
+  const qualLines = v.qualifications?.length
+    ? v.qualifications.map(q =>
+        `  • [${q.category ?? "?"}] ${q.region ?? "All"} — ${q.qualificationStatus ?? "?"}`
+      ).join("\n")
+    : "  N/A";
+
   return (
     `Vendor Details\n` +
     `${"═".repeat(60)}\n` +
-    `Vendor ID      : ${v.vendorId}\n` +
-    `Name           : ${v.name}\n` +
-    `Status         : ${v.status}\n` +
-    `Type           : ${v.type          ?? "N/A"}\n` +
-    `Tax ID         : ${v.taxId         ?? "N/A"}\n` +
-    `DUNS Number    : ${v.dunsNumber    ?? "N/A"}\n` +
-    `Website        : ${v.website       ?? "N/A"}\n` +
-    `Registered     : ${v.registeredDate ?? "N/A"}\n` +
-    `Realm          : ${v.realm}\n` +
-    `\nAddress        : ${formatAddress(v.primaryAddress)}\n` +
-    `\nPrimary Contact: ${formatContact(v.primaryContact)}\n` +
-    (v.categories?.length
-      ? `\nCategories     :\n${v.categories.map(c => `  • ${c}`).join("\n")}`
-      : "")
+    `Vendor ID          : ${v.vendorId}\n` +
+    `Name               : ${v.name}\n` +
+    `Registration Status: ${v.registrationStatus}\n` +
+    `Qualification Status: ${v.qualificationStatus ?? "N/A"}\n` +
+    `ERP Vendor ID      : ${v.erpVendorId ?? "N/A"}\n` +
+    `ACM ID             : ${v.acmId ?? "N/A"}\n` +
+    `Integrated to ERP  : ${v.integratedToErp ?? "N/A"}\n` +
+    `Blocked            : ${v.isBlocked ?? "N/A"}\n` +
+    `Last Updated       : ${v.lastUpdateDate ?? "N/A"}\n` +
+    `Realm              : ${v.realm}\n` +
+    `\nAddress        :\n  ${formatAddress(v.primaryAddress)}\n` +
+    `\nTax Numbers    :\n${taxLines}\n` +
+    `\nBank Accounts  :\n${bankLines}\n` +
+    `\nCustom Fields  :\n${customLines}\n` +
+    `\nQualifications :\n${qualLines}\n`
   );
 }
